@@ -6,7 +6,8 @@ use crate::utils::DebugOptionHex;
 
 use super::FromBtEvent;
 
-pub const GID_SIZE: usize = 24;
+// pub const GID_SIZE: usize = 24;
+pub const GID_SIZE: usize = 16;
 
 #[derive(Debug, TryFromBtFieldConst, Clone)]
 pub struct RclInit {

@@ -1260,8 +1260,11 @@ pub struct RmwGid {
 
 impl RmwGid {
     pub fn new(gid: [u8; raw_events::ros2::GID_SIZE]) -> Self {
-        let gid_main = gid[..GID_SIZE].try_into().unwrap();
-        let gid_suffix = gid[GID_SIZE..].try_into().unwrap();
+        // let gid_main = gid[..GID_SIZE].try_into().unwrap();
+        // let gid_suffix = gid[GID_SIZE..].try_into().unwrap();
+        let gid_main = gid;  // entire 16 bytes as main
+        let gid_suffix = [0u8; 8];  // or remove if not used
+        
         Self {
             gid: DdsGid { gid: gid_main },
             gid_suffix,
