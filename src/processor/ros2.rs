@@ -383,6 +383,8 @@ impl Processor {
         context_id: ContextId,
         context: &Context,
     ) -> Result<processed_events::ros2::RclSubscriptionInit> {
+        use std::sync::Weak;
+
         let subscriber_arc = self
             .subscribers_by_rmw
             .entry(event.rmw_subscription_handle.into_id(context_id))
@@ -394,18 +396,21 @@ impl Processor {
                 Arc::new(Mutex::new(subscriber))
             });
 
-        let node_arc = self
+        let node_arc_opt = self
             .nodes_by_rcl
-            .get_or_err(event.node_handle.into_id(context_id), "rcl_handle")
-            .map_err(|e| e.dependent_object(&*subscriber_arc))
-            .map_err(|e| e.with_ros2_event(event, time, context))?
-            .clone();
+            .get(&event.node_handle.into_id(context_id))
+            .cloned();
+
+        let node_weak = node_arc_opt
+            .as_ref()
+            .map(Arc::downgrade)
+            .unwrap_or_else(Weak::new);
 
         let init_result = subscriber_arc.lock().unwrap().rcl_init(
             event.subscription_handle,
             event.topic_name.clone(),
             event.queue_depth,
-            Arc::downgrade(&node_arc),
+            node_weak.clone(),
         );
 
         if let Err(_e) = init_result {
@@ -427,7 +432,7 @@ impl Processor {
                     event.subscription_handle,
                     event.topic_name.clone(),
                     event.queue_depth,
-                    Arc::downgrade(&node_arc),
+                    node_weak.clone(),
                 )
                 .expect("New Subscriber should not be initialized yet");
             *subscriber_arc = Arc::new(Mutex::new(subscriber));
@@ -443,10 +448,12 @@ impl Processor {
                 old.lock().unwrap().mark_removed();
             });
 
-        node_arc
-            .lock()
-            .unwrap()
-            .add_subscriber(subscriber_arc.clone());
+        if let Some(node_arc) = node_arc_opt {
+            node_arc.lock().unwrap().add_subscriber(subscriber_arc.clone());
+        } else {
+            log::warn!("Subscription {:?} has no associated node (possibly lifecycle event)", event.subscription_handle);
+            // Optionally: track orphaned subscriptions for debug/cleanup
+        }
 
         Ok(processed_events::ros2::RclSubscriptionInit {
             subscription: subscriber_arc.clone(),
@@ -538,14 +545,27 @@ impl Processor {
         context_id: ContextId,
         context: &Context,
     ) -> Result<processed_events::ros2::RmwTake> {
-        let subscriber = self
-            .subscribers_by_rmw
-            .get_or_err(
-                event.rmw_subscription_handle.into_id(context_id),
-                "rmw_handle",
-            )
-            .map_err(|e| e.with_ros2_event(event, time, context))
-            .wrap_err("Taken message missing subscriber.")?;
+        let subscriber = match self
+        .subscribers_by_rmw
+        .get(&event.rmw_subscription_handle.into_id(context_id))
+        {
+            Some(sub) => sub,
+            None => {
+                log::warn!(
+                    target: "process_rmw_take",
+                    "Subscriber not found for rmw_handle = 0x{:x} at event: [{:?}] (procname: {:?}, hostname: {:?}). Skipping event.",
+                    event.rmw_subscription_handle,
+                    event,
+                    context.procname(),
+                    context.hostname()
+                );
+                // Return an error here
+                return Err(color_eyre::eyre::eyre!(
+                    "Skipping event: missing subscriber (rmw_handle = 0x{:x})",
+                    event.rmw_subscription_handle
+                ));
+            }
+        };
         let topic = subscriber
             .lock()
             .unwrap()

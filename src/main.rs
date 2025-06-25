@@ -289,8 +289,15 @@ fn run() -> color_eyre::eyre::Result<()> {
     });
 
     for event in &mut iter {
-        let event = event.wrap_err("Failed to process event")?;
-        log::trace!("{event}");
+        match event {
+            Ok(event) => {
+                log::trace!("{event}");
+            }
+            Err(e) => {
+                // Print a warning but do not stop processing
+                log::warn!("Failed to process event: {e}");
+            }
+        }
     }
 
     iter.log_counters();
