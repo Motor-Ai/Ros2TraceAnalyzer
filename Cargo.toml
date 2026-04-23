@@ -22,6 +22,7 @@ env_logger = "=0.11.5"
 clap-verbosity-flag = "=2.2.3"
 colorgrad = "=0.7.0"
 serde_json = "=1.0.133"
+unicode-segmentation = "=v1.13.1"
 
 
 [workspace]
