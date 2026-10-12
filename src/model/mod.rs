@@ -234,7 +234,7 @@ pub struct Subscriber {
     rcl_handle: Known<u64>,
     rclcpp_handle: Known<u64>,
 
-    rmw_gid: Known<RmwGid>,
+    rmw_gid: Known<Gid>,
 
     topic_name: Known<String>,
     node: Known<ArcWeak<Mutex<Node>>>,
@@ -257,14 +257,13 @@ impl Subscriber {
     pub fn rmw_init(
         &mut self,
         rmw_handle: u64,
-        gid: [u8; raw_events::ros2::GID_SIZE],
+        gid: raw_events::ros2::Gid,
     ) -> Result<(), AlreadyInitializedError> {
         assert!(!self.is_removed());
-        if self.rmw_handle.is_unknown_or_eq(&rmw_handle)
-            && self.rmw_gid.is_unknown_or_eq(&RmwGid::new(gid))
-        {
+        let gid = Gid::from(gid);
+        if self.rmw_handle.is_unknown_or_eq(&rmw_handle) && self.rmw_gid.is_unknown_or_eq(&gid) {
             self.rmw_handle = Known::new(rmw_handle);
-            self.rmw_gid = Known::new(RmwGid::new(gid));
+            self.rmw_gid = Known::new(gid);
             Ok(())
         } else {
             Err(AlreadyInitializedError::new(
@@ -425,7 +424,7 @@ pub struct Publisher {
     rcl_handle: Known<u64>,
     rclcpp_handle: Known<u64>,
 
-    rmw_gid: Known<RmwGid>,
+    rmw_gid: Known<Gid>,
 
     topic_name: Known<String>,
     node: Known<ArcWeak<Mutex<Node>>>,
@@ -438,14 +437,13 @@ impl Publisher {
     pub fn rmw_init(
         &mut self,
         rmw_handle: u64,
-        gid: [u8; raw_events::ros2::GID_SIZE],
+        gid: raw_events::ros2::Gid,
     ) -> Result<(), AlreadyInitializedError> {
         assert!(!self.is_removed());
-        if self.rmw_handle.is_unknown_or_eq(&rmw_handle)
-            && self.rmw_gid.is_unknown_or_eq(&RmwGid::new(gid))
-        {
+        let gid = Gid::from(gid);
+        if self.rmw_handle.is_unknown_or_eq(&rmw_handle) && self.rmw_gid.is_unknown_or_eq(&gid) {
             self.rmw_handle = Known::new(rmw_handle);
-            self.rmw_gid = Known::new(RmwGid::new(gid));
+            self.rmw_gid = Known::new(gid);
             Ok(())
         } else {
             Err(AlreadyInitializedError::new(
@@ -1003,10 +1001,11 @@ impl Callback {
     }
 
     pub fn mark_removed(&mut self) {
-        assert!(self
-            .get_caller()
-            .map_or(Some(true), CallbackCaller::is_removed)
-            .unwrap_or(true));
+        assert!(
+            self.get_caller()
+                .map_or(Some(true), CallbackCaller::is_removed)
+                .unwrap_or(true)
+        );
         self.is_removed = true;
     }
 
@@ -1242,33 +1241,38 @@ impl SubscriptionMessage {
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub enum Gid {
-    DdsGid(DdsGid),
-    RmwGid(RmwGid),
-}
-
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct DdsGid {
+pub struct Gid {
     gid: [u8; GID_SIZE],
+    suffix: Option<[u8; GID_SUFFIX_SIZE]>,
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct RmwGid {
-    gid: DdsGid,
-    gid_suffix: [u8; GID_SUFFIX_SIZE],
-}
-
-impl RmwGid {
-    pub fn new(gid: [u8; raw_events::ros2::GID_SIZE]) -> Self {
-        // let gid_main = gid[..GID_SIZE].try_into().unwrap();
-        // let gid_suffix = gid[GID_SIZE..].try_into().unwrap();
-        let gid_main = gid;  // entire 16 bytes as main
-        let gid_suffix = [0u8; 8];  // or remove if not used
-        
-        Self {
-            gid: DdsGid { gid: gid_main },
-            gid_suffix,
+impl From<raw_events::ros2::Gid> for Gid {
+    fn from(gid: raw_events::ros2::Gid) -> Self {
+        match gid {
+            raw_events::ros2::Gid::Jazzy(gid_array) => Self::new(gid_array),
+            raw_events::ros2::Gid::Kilted(gid_array) => Self::new(gid_array),
         }
+    }
+}
+
+pub trait NewGid<const N: usize> {
+    fn new(gid: [u8; N]) -> Self;
+}
+
+impl NewGid<{ raw_events::ros2::GID_SIZE_JAZZY }> for Gid {
+    fn new(gid: [u8; raw_events::ros2::GID_SIZE_JAZZY]) -> Self {
+        let gid_main = gid[..GID_SIZE].try_into().unwrap();
+        let gid_suffix = gid[GID_SIZE..].try_into().unwrap();
+        Self {
+            gid: gid_main,
+            suffix: Some(gid_suffix),
+        }
+    }
+}
+
+impl NewGid<{ raw_events::ros2::GID_SIZE_KILTED }> for Gid {
+    fn new(gid: [u8; raw_events::ros2::GID_SIZE_KILTED]) -> Self {
+        Self { gid, suffix: None }
     }
 }
 

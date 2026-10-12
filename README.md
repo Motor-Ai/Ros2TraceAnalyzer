@@ -5,13 +5,16 @@ Ros2TraceAnalyzer is a fast command-line tool to extract useful data from LTTng 
 ## Supported ROS versions
 
 - Jazzy
+- Kilted (traces of `rclcpp_lifecycle` nodes are supported: their services are linked to the
+  `rclcpp_service_callback_added` events by position, see `process_rcl_lifecycle_state_machine_init`)
 
 ## Installation
 
-First make sure you have development version of Babeltrace 2 library. It can be installed on Ubuntu using:
+First make sure you have development version of Babeltrace 2 library
+and clang development files. On Ubuntu, it can be installed  using:
 
 ```sh
-apt install libbabeltrace2-dev
+apt install libbabeltrace2-dev libclang-dev
 ```
 
 The Ros2TraceAnalyzer can then be compiled and installed using `cargo` by running:
@@ -20,8 +23,8 @@ The Ros2TraceAnalyzer can then be compiled and installed using `cargo` by runnin
 cargo install --git https://github.com/skoudmar/Ros2TraceAnalyzer.git
 ```
 
-Compilation should work with at least Rust version 1.83. Currently, we
-don't make any guarantees for minimum supported Rust version.
+Compilation should work with at least Rust version 1.90. Currently, we
+don't make any guarantees for minimum supported Rust version (MSRV).
 
 ## Usage
 
@@ -53,65 +56,128 @@ Record traces of your ROS application:
 Then you can use `Ros2TraceAnalyzer` subcommands to obtain various
 information from the trace.
 
-<!-- `$ cargo run -- -h | sed 's/ \[default:/\n          \[default:/g'` -->
+<!-- `$ COLUMNS=100 NO_COLOR=1 cargo run --locked --quiet -- --help` as text -->
+```text
+Usage: Ros2TraceAnalyzer [OPTIONS] <COMMAND>
 
+Commands:
+  analyze  Analyze a ROS 2 trace and generate graphs, JSON or bundle outputs
+  chart    Render a chart of a specific property of a ROS 2 interface
+  viewer   Start a .dot viewer capable of generating charts on demand
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+  -v, --verbose...  Increase logging verbosity
+  -q, --quiet...    Decrease logging verbosity
+  -h, --help        Print help
 ```
-Usage: Ros2TraceAnalyzer [OPTIONS] <TRACE_PATHS>...
+
+## Analyze
+This command analyzes the traces and saves relevant information for later use into JSON, TXT and DOT files. 
+
+<!-- `$ COLUMNS=100 NO_COLOR=1 cargo run --locked --quiet -- analyze --help` as text -->
+```text
+Analyze a ROS 2 trace and generate graphs, JSON or bundle outputs
+
+Usage: Ros2TraceAnalyzer analyze [OPTIONS] <TRACE_PATHS>...
 
 Arguments:
-  <TRACE_PATHS>...  Paths to directories to search for the trace to analyze
+  <TRACE_PATHS>...
+          Paths to directories to search for the trace to analyze
+          
+          All subdirectories are automatically searched too.
 
 Options:
       --all
           Run all analyses with their default output filenames
-      --dependency-graph[=<FILENAME>]
-          Construct a detailed dependency graph with timing statistics in DOT format
-      --message-latency[=<FILENAME>]
-          Analyze the latency of messages
-      --callback-duration[=<FILENAME>]
-          Analyze the callback duration and inter-arrival time
-      --callback-publications[=<FILENAME>]
-          Analyze the publications made by callbacks
-      --callback-dependency[=<FILENAME>]
-          Generate a callback dependency graph in DOT format
-      --message-take-to-callback-latency[=<FILENAME>]
-          Analyze the latency between message take and callback execution
-      --utilization[=<FILENAME>]
-          Analyze system utilization based on quantile callback durations
-      --real-utilization[=<FILENAME>]
-          Analyze system utilization based on real execution times
-      --spin-duration[=<FILENAME>]
-          Analyze the duration of executor spins
-  -o, --out-dir <OUT_DIR>
-          Directory to write output files
-      --quantiles <QUANTILES>
-          Quantiles to compute for the latency and duration analysis
-          [default: 0,0.10,0.5,0.90,0.99,1]
-      --utilization-quantile <QUANTILE>
-          Callback duration quantile to use for utilization analysis
-          [default: 0.9]
-      --thickness
-          Set the edge thickness in dependency graph based on its median latency
-      --color
-          Color edge in dependency graph based on its median latency
-      --min-multiplier <MIN_MULTIPLIER>
-          Minimum multiplier for edge coloring or thickness
-          [default: 5.0]
+          
+          The output `filename` can be changed by specific analysis option.
+          
+          This is enabled by default unless specific analysis option is provided.
+
   -v, --verbose...
           Increase logging verbosity
+
+      --dependency-graph[=<FILENAME>]
+          Construct a detailed dependency graph with timing statistics in DOT format
+
   -q, --quiet...
           Decrease logging verbosity
+
+      --message-latency[=<FILENAME>]
+          Analyze the latency of messages
+
+      --callback-duration[=<FILENAME>]
+          Analyze the callback duration and inter-arrival time
+
+      --callback-publications[=<FILENAME>]
+          Analyze the publications made by callbacks
+
+      --callback-dependency[=<FILENAME>]
+          Generate a callback dependency graph in DOT format
+
+      --message-take-to-callback-latency[=<FILENAME>]
+          Analyze the latency between message take and callback execution
+
+      --utilization[=<FILENAME>]
+          Analyze system utilization based on quantile callback durations
+
+      --real-utilization[=<FILENAME>]
+          Analyze system utilization based on real execution times
+
+      --spin-duration[=<FILENAME>]
+          Analyze the duration of executor spins
+
+  -o, --out-dir <OUT_DIR>
+          Directory to write output files
+          
+          If not provided, the current working directory is used.
+          
+          When analysis output filename is specified and it is not an absolute path, it is resolved relative to `OUT_DIR`.
+
+      --quantiles <QUANTILES>
+          Quantiles to compute for the latency and duration analysis.
+          
+          The quantiles must be in the range [0, 1].
+          
+          If not specified, the default quantiles are: 0 (minimum), 0.10, 0.5 (median), 0.90, 0.99, 1 (maximum)
+          
+          [default: 0,0.10,0.5,0.90,0.99,1]
+
+      --utilization-quantile <QUANTILE>
+          Callback duration quantile to use for utilization analysis
+          
+          [default: 0.9]
+
+      --thickness
+          Set the edge thickness in dependency graph based on its median latency
+
+      --color
+          Color edge in dependency graph based on its median latency
+
+      --min-multiplier <MIN_MULTIPLIER>
+          Minimum multiplier for edge coloring or thickness.
+          
+          Can be any positive number.
+          
+          The minimum multiplier is used to set the maximum value in gradients to be at least `MIN_MULTIPLIER` times the minimum value.
+          
+          The gradient range is exactly [minimum value, max(maximum value, minimum value * `MIN_MULTIPLIER`)].
+          
+          [default: 5.0]
+
       --exact-trace-path
           Only the directories specified by `TRACE_PATHS` are searched for traces, not their subdirectories
+
   -h, --help
-          Print help (see more with '--help')
+          Print help (see a summary with '-h')
 ```
 
 To gain **overview of timing in your application**, generate a
 dependency graph and view it with [xdot.py][]:
 
 ```sh
-Ros2TraceAnalyzer ~/lttng-traces/session-20240123-123456 --dependency-graph -o graph/ --thickness
+Ros2TraceAnalyzer analyze ~/lttng-traces/session-20240123-123456 --dependency-graph -o graph/ --thickness
 xdot graph/dependency_graph.dot
 ```
 
@@ -146,7 +212,7 @@ You can visualize individual data by using Jupyter notebooks in the
 example, as follows:
 
 ```sh
-Ros2TraceAnalyzer ~/lttng-traces/session-20240123-123456 --message-latency -o json
+Ros2TraceAnalyzer analyze ~/lttng-traces/session-20240123-123456 --message-latency -o json
 jq '.[]|select(.topic=="/clock" and .subscriber_node=="/rviz2")|.latencies[]' json/message_latency.json | gnuplot -p -e 'plot "-"'
 ```
 
@@ -200,6 +266,106 @@ Thread 1737158 on steelpick has utilization  2.10334 %
 > correct. However, they are already useful indication for when
 > something goes wrong in your application.
 
+## Chart
+This command is reserved for later use. It is intended for generating charts from analyzed traces.
+
+<!-- `$ COLUMNS=100 NO_COLOR=1 cargo run --locked --quiet -- chart --help` as text -->
+```text
+Render a chart of a specific property of a ROS 2 interface
+
+Usage: Ros2TraceAnalyzer chart [OPTIONS] --node <NODE> --value <VALUE> <COMMAND>
+
+Commands:
+  histogram  
+  scatter    
+  help       Print this message or the help of the given subcommand(s)
+
+Options:
+  -n, --node <NODE>
+          Full name of the node to draw the chart for
+          
+          The name should include the namespace and node's name
+
+  -v, --verbose...
+          Increase logging verbosity
+
+  -i, --input-path <INPUT>
+          The input path, either a file of the data or a folder containing the default named file with the necessary data
+
+  -q, --quiet...
+          Decrease logging verbosity
+
+  -o, --output-path <OUTPUT>
+          The output path, either a folder to which the file will be generated or a file to write into
+
+  -c, --clean
+          Indicates whether the chart should be rendered from scratch.
+          
+          If not set, an existing chart will be reused only if it matches all specified parameters.
+
+      --value <VALUE>
+          The value to plot into the chart
+
+          Possible values:
+          - callback-duration:  Callback execution durations
+          - activations-delay:  Delays between callback or timer activations
+          - publications-delay: Delays between publisher publications
+          - messages-delay:     Delays between subscriber messages
+          - messages-latency:   Latency of a communication channel
+
+      --size <SIZE>
+          The rectangular size of the rendered image in pixels
+          
+          - For PNG this directly translates to pixels
+          
+          - For SVG this is the size in pixels with scale 1.0
+          
+          [default: 800]
+
+      --output-format <OUTPUT_FORMAT>
+          The filetype (output format) the rendered image should be in
+          
+          [default: svg]
+          [possible values: svg, png]
+
+  -h, --help
+          Print help (see a summary with '-h')
+```
+
+## Viewer
+This command is reserved for later use. Builtin .dot graphs viewer.
+<!-- `$ COLUMNS=100 NO_COLOR=1 cargo run --locked --quiet -- viewer --help` as text -->
+```text
+Start a .dot viewer capable of generating charts on demand
+
+Usage: Ros2TraceAnalyzer viewer [OPTIONS] <DOTFILE>
+
+Arguments:
+  <DOTFILE>  The dotfile to open
+
+Options:
+  -v, --verbose...
+          Increase logging verbosity
+      --viewer <VIEWER>
+          The entry point to the python viewer (defaults to ./xdotviewer/main.py)
+  -q, --quiet...
+          Decrease logging verbosity
+  -t, --tracer-exec <Ros2TraceAnalyzer>
+          The executable to run to invoke the Ros2TraceAnalyzer (defaults to ./target/release/Ros2TraceAnalyzer)
+  -d, --data <DATA>
+          The directory with the datafiles (defaults to CWD)
+  -h, --help
+          Print help
+```
+
 
 [`ros2trace`]: https://index.ros.org/p/ros2trace/
 [xdot.py]: https://github.com/jrfonseca/xdot.py
+
+**Acknowledgment:**
+
+This project was co-financed from the state budget by the Technology
+agency of the Czech Republic under the project TN01000026 *Božek
+Vehicle Engineering National Center of Competence*.
+
+<a href="https://tacr.gov.cz/program/program-narodni-centra-kompetence/"><img width="400" height="109" alt="National Centres of Competence Programme_red_small" src="https://github.com/user-attachments/assets/15931535-8dcb-4d39-9d52-0ad1326fa203" /></a>

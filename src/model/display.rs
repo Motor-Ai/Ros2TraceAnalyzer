@@ -7,8 +7,8 @@ use crate::utils::{
 };
 
 use super::{
-    Callback, CallbackCaller, CallbackInstance, CallbackType, Client, DdsGid, Gid, Name, Node,
-    PartiallyKnown, PublicationMessage, Publisher, RmwGid, Service, SpinInstance, Subscriber,
+    Callback, CallbackCaller, CallbackInstance, CallbackType, Client, Gid, Name, Node,
+    PartiallyKnown, PublicationMessage, Publisher, Service, SpinInstance, Subscriber,
     SubscriptionMessage, Time, Timer,
 };
 
@@ -110,8 +110,14 @@ impl std::fmt::Display for Subscriber {
             .as_ref()
             .map(|callback| DisplayArcMutex::new(callback, f.alternate()));
 
-        write!(f, "(topic={}, handles={{rmw={:x}, rcl={:x}, rclcpp={:x}}}, queue_depth={}, node={node}, callback={callback:#})",
-            self.topic_name.as_ref().map(DisplayDebug), self.rmw_handle, self.rcl_handle, self.rclcpp_handle, self.queue_depth,
+        write!(
+            f,
+            "(topic={}, handles={{rmw={:x}, rcl={:x}, rclcpp={:x}}}, queue_depth={}, node={node}, callback={callback:#})",
+            self.topic_name.as_ref().map(DisplayDebug),
+            self.rmw_handle,
+            self.rcl_handle,
+            self.rclcpp_handle,
+            self.queue_depth,
         )
     }
 }
@@ -136,8 +142,14 @@ impl std::fmt::Display for DisplaySubscriberWithoutNode<'_> {
             .as_ref()
             .map(|callback| DisplayArcMutex::new(callback, false));
 
-        write!(f, "(topic={}, handles={{rmw={:x}, rcl={:x}, rclcpp={:x}}}, queue_depth={}, callback={callback:#})",
-            self.0.topic_name.as_ref().map(DisplayDebug), self.0.rmw_handle, self.0.rcl_handle, self.0.rclcpp_handle, self.0.queue_depth,
+        write!(
+            f,
+            "(topic={}, handles={{rmw={:x}, rcl={:x}, rclcpp={:x}}}, queue_depth={}, callback={callback:#})",
+            self.0.topic_name.as_ref().map(DisplayDebug),
+            self.0.rmw_handle,
+            self.0.rcl_handle,
+            self.0.rclcpp_handle,
+            self.0.queue_depth,
         )
     }
 }
@@ -153,8 +165,13 @@ impl std::fmt::Display for Service {
             .as_ref()
             .map(|callback| DisplayArcMutex::new(callback, f.alternate()));
 
-        write!(f, "(service={}, handles={{rmw={:x}, rcl={:x}, rclcpp={:x}}}, node={node}, callback={callback:#})",
-            self.name.as_ref().map(DisplayDebug), self.rmw_handle, self.rcl_handle, self.rclcpp_handle,
+        write!(
+            f,
+            "(service={}, handles={{rmw={:x}, rcl={:x}, rclcpp={:x}}}, node={node}, callback={callback:#})",
+            self.name.as_ref().map(DisplayDebug),
+            self.rmw_handle,
+            self.rcl_handle,
+            self.rclcpp_handle,
         )
     }
 }
@@ -398,7 +415,7 @@ impl std::fmt::Display for CallbackType {
     }
 }
 
-impl std::fmt::Display for DdsGid {
+impl std::fmt::Display for Gid {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for byte in self.gid.iter().take(12) {
             write!(f, "{byte:02x}")?;
@@ -408,51 +425,22 @@ impl std::fmt::Display for DdsGid {
             write!(f, "{byte:02x}")?;
         }
 
-        Ok(())
-    }
-}
-
-impl std::fmt::Debug for DdsGid {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple(stringify!(DdsGid))
-            .field(&self.to_string())
-            .finish()
-    }
-}
-
-impl std::fmt::Display for RmwGid {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}-", self.gid)?;
-        for byte in &self.gid_suffix {
-            write!(f, "{byte:02x}")?;
+        if let Some(suffix) = &self.suffix {
+            write!(f, "-")?;
+            for byte in suffix {
+                write!(f, "{byte:02x}")?;
+            }
         }
+
         Ok(())
-    }
-}
-
-impl std::fmt::Debug for RmwGid {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple(stringify!(RmwGid))
-            .field(&self.to_string())
-            .finish()
-    }
-}
-
-impl std::fmt::Display for Gid {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::DdsGid(gid) => write!(f, "{gid}"),
-            Self::RmwGid(gid) => write!(f, "{gid}"),
-        }
     }
 }
 
 impl std::fmt::Debug for Gid {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::DdsGid(gid) => std::fmt::Debug::fmt(gid, f),
-            Self::RmwGid(gid) => std::fmt::Debug::fmt(gid, f),
-        }
+        f.debug_tuple(stringify!(Gid))
+            .field(&self.to_string())
+            .finish()
     }
 }
 

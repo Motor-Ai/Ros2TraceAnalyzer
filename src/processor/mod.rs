@@ -158,6 +158,12 @@ pub struct Processor {
     publishers_by_rcl: HashMap<Id<u64>, Arc<Mutex<Publisher>>>,
 
     services_by_rcl: HashMap<Id<u64>, Arc<Mutex<Service>>>,
+    /// Services seen in `rcl_service_init` that have no `rclcpp_service_callback_added` yet,
+    /// in initialization order, with the node they belong to.
+    uncalled_services: Vec<(Id<u64>, Id<u64>)>,
+    /// rcl handles of lifecycle services waiting for their rclcpp callback event,
+    /// by thread, in creation order. See `process_rcl_lifecycle_state_machine_init`.
+    lifecycle_services_by_thread: HashMap<(ContextId, u32), std::collections::VecDeque<Id<u64>>>,
 
     clients_by_rcl: HashMap<Id<u64>, Arc<Mutex<Client>>>,
 
@@ -307,6 +313,11 @@ impl Processor {
             raw_events::ros2::Event::RclcppServiceCallbackAdded(event) => self
                 .process_rclcpp_service_callback_added(event, time, context_id, context)?
                 .into(),
+            // Only bookkeeping for the service events above; the event itself stays raw.
+            raw_events::ros2::Event::RclLifecycleStateMachineInit(lifecycle_event) => {
+                self.process_rcl_lifecycle_state_machine_init(lifecycle_event, context_id, context);
+                return Err(UnsupportedOrError::Unsupported(event.clone()));
+            }
             raw_events::ros2::Event::RclClientInit(event) => self
                 .process_rcl_client_init(event, time, context_id, context)?
                 .into(),
