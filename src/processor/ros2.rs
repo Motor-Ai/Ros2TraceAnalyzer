@@ -724,10 +724,44 @@ impl Processor {
         }
 
         node_arc.lock().unwrap().add_service(service_arc.clone());
+        let service_id = event.service_handle.into_id(context_id);
+        self.uncalled_services.retain(|&(id, _)| id != service_id);
+        self.uncalled_services
+            .push((service_id, event.node_handle.into_id(context_id)));
 
         Ok(processed_events::ros2::RclServiceInit {
             service: service_arc.clone(),
         })
+    }
+
+    /// Kilted's `rclcpp_lifecycle` creates its five lifecycle services in
+    /// `rcl_lifecycle_state_machine_init` (they get an `rcl_service_init` with
+    /// the handle inside the state machine), then wraps them in `rclcpp::Service`
+    /// objects holding a *copy* of the `rcl_service_t`. That copy is a different
+    /// address, and the only handle `rclcpp_service_callback_added` carries, so
+    /// there is no `rcl_service_init` for it. `rcl_lifecycle_state_machine_init`
+    /// ends the creation of those services: the node's services still without a
+    /// callback at that point are the lifecycle services, and rclcpp registers
+    /// their callbacks right after, on the same thread, in creation order.
+    pub(super) fn process_rcl_lifecycle_state_machine_init(
+        &mut self,
+        event: &raw_events::ros2::RclLifecycleStateMachineInit,
+        context_id: ContextId,
+        context: &Context,
+    ) {
+        let node_id = event.node_handle.into_id(context_id);
+        let queue = self
+            .lifecycle_services_by_thread
+            .entry((context_id, context.vtid()))
+            .or_default();
+        self.uncalled_services.retain(|&(service_id, service_node_id)| {
+            if service_node_id == node_id {
+                queue.push_back(service_id);
+                false
+            } else {
+                true
+            }
+        });
     }
 
     pub(super) fn process_rclcpp_service_callback_added(
@@ -737,15 +771,31 @@ impl Processor {
         context_id: ContextId,
         context: &Context,
     ) -> Result<processed_events::ros2::RclCppServiceCallbackAdded> {
-        let service_arc = self
-            .services_by_rcl
-            .entry(event.service_handle.into_id(context_id))
-            .or_insert_with_key(|key| {
-                log::warn!("Service not found for callback. Creating new (possibly duplicate) service. Event: [{time}] {event:?} {context:?}");
-                let service = Service::new(key.id);
-                Arc::new(Mutex::new(service))
-            });
-
+        let handle_id = event.service_handle.into_id(context_id);
+        let service_arc = if let Some(service_arc) = self.services_by_rcl.get(&handle_id) {
+            self.uncalled_services.retain(|&(service_id, _)| service_id != handle_id);
+            service_arc
+        } else {
+            // A lifecycle service wrapped by rclcpp: see process_rcl_lifecycle_state_machine_init.
+            let rcl_id = self
+                .lifecycle_services_by_thread
+                .get_mut(&(context_id, context.vtid()))
+                .and_then(std::collections::VecDeque::pop_front)
+                .ok_or_else(|| {
+                    error::NotFound::new(
+                        event.service_handle,
+                        "service_handle (no rcl_service_init for it: trace started after the node?)",
+                        error::ObjectType::Service,
+                    )
+                    .with_ros2_event(event, time, context)
+                })?;
+            let service_arc = self
+                .services_by_rcl
+                .get(&rcl_id)
+                .expect("queued lifecycle service was initialized by rcl_service_init")
+                .clone();
+            &*self.services_by_rcl.entry(handle_id).or_insert(service_arc)
+        };
         let callback_arc =
             Callback::new_service(event.callback, service_arc, context.hostname().to_owned());
 
@@ -1016,5 +1066,121 @@ fn filter_out_removed_callers(old_arc: Arc<Mutex<Callback>>) -> Option<Arc<Mutex
     } else {
         drop(old);
         Some(old_arc)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::events_common::Context;
+    use crate::model::Time;
+    use crate::processed_events::ros2::Event as Processed;
+    use crate::processor::{Processor, UnsupportedOrError};
+    use crate::raw_events::ros2::{
+        Event, RclLifecycleStateMachineInit, RclNodeInit, RclServiceInit,
+        RclcppServiceCallbackAdded,
+    };
+    use crate::utils::WeakKnown;
+
+    fn ctx(vtid: u32) -> Context {
+        Context::new(0, 100, vtid, "node".to_owned(), "host".to_owned())
+    }
+
+    fn feed(p: &mut Processor, event: Event, vtid: u32) -> Result<Option<Processed>, String> {
+        match p.process_raw_ros2_event(&event, &ctx(vtid), Time::from_nanos(0)) {
+            Ok(processed) => Ok(Some(processed)),
+            Err(UnsupportedOrError::Unsupported(_)) => Ok(None),
+            Err(UnsupportedOrError::Error(e)) => Err(e.to_string()),
+        }
+    }
+
+    fn init_node(p: &mut Processor) {
+        let node = Event::RclNodeInit(RclNodeInit {
+            node_handle: 0x10,
+            rmw_handle: 0x11,
+            node_name: "n".into(),
+            namespace: "/".into(),
+        });
+        feed(p, node, 1).unwrap();
+    }
+
+    fn init_service(p: &mut Processor, handle: u64, name: &str) {
+        let service = Event::RclServiceInit(RclServiceInit {
+            service_handle: handle,
+            node_handle: 0x10,
+            rmw_service_handle: handle + 1,
+            service_name: name.into(),
+        });
+        feed(p, service, 1).unwrap();
+    }
+
+    fn init_state_machine(p: &mut Processor, vtid: u32) {
+        let event = Event::RclLifecycleStateMachineInit(RclLifecycleStateMachineInit {
+            node_handle: 0x10,
+            state_machine: 0x1f0,
+        });
+        feed(p, event, vtid).unwrap();
+    }
+
+    /// Name of the service the callback ended up on.
+    fn callback_added(
+        p: &mut Processor,
+        handle: u64,
+        callback: u64,
+        vtid: u32,
+    ) -> Result<String, String> {
+        let event = Event::RclcppServiceCallbackAdded(RclcppServiceCallbackAdded {
+            service_handle: handle,
+            callback,
+        });
+        match feed(p, event, vtid)? {
+            Some(Processed::RclCppServiceCallbackAdded(added)) => {
+                let callback = added.callback.lock().unwrap();
+                match callback.get_caller().unwrap().get_caller_as_string() {
+                    WeakKnown::Known(name) => Ok(name),
+                    other => Err(format!("service name not known: {other:?}")),
+                }
+            }
+            other => Err(format!("unexpected result: {other:?}")),
+        }
+    }
+
+    /// Kilted rclcpp_lifecycle: the lifecycle services get an `rcl_service_init` inside the
+    /// state machine, but `rclcpp_service_callback_added` carries the handle of rclcpp's
+    /// copy of the `rcl_service_t`. The callbacks must still end up on the right services.
+    #[test]
+    fn lifecycle_service_callbacks_are_linked_in_creation_order() {
+        let mut p = Processor::new();
+        init_node(&mut p);
+        // A normal service: its callback follows the init directly.
+        init_service(&mut p, 0x100, "/n/get_parameters");
+        assert_eq!(callback_added(&mut p, 0x100, 0xc0, 1).unwrap(), "/n/get_parameters");
+        // Lifecycle services: initialized inside rcl_lifecycle_state_machine_init.
+        init_service(&mut p, 0x200, "/n/change_state");
+        init_service(&mut p, 0x208, "/n/get_state");
+        init_state_machine(&mut p, 1);
+        // rclcpp's copies have unrelated handles.
+        assert_eq!(callback_added(&mut p, 0x900, 0xc1, 1).unwrap(), "/n/change_state");
+        assert_eq!(callback_added(&mut p, 0x910, 0xc2, 1).unwrap(), "/n/get_state");
+    }
+
+    /// A callback for a service the trace never initialized is a real trace problem
+    /// (e.g. tracing started after the node) and must be reported, not papered over.
+    #[test]
+    fn callback_for_unknown_service_is_an_error() {
+        let mut p = Processor::new();
+        init_node(&mut p);
+        assert!(callback_added(&mut p, 0x900, 0xc1, 1).is_err());
+    }
+
+    /// Lifecycle services are matched per thread; another thread's callbacks must not
+    /// consume them.
+    #[test]
+    fn lifecycle_services_are_not_consumed_by_other_threads() {
+        let mut p = Processor::new();
+        init_node(&mut p);
+        init_service(&mut p, 0x200, "/n/change_state");
+        init_state_machine(&mut p, 1);
+        assert!(callback_added(&mut p, 0x900, 0xc1, 2).is_err());
+        assert_eq!(callback_added(&mut p, 0x900, 0xc1, 1).unwrap(), "/n/change_state");
     }
 }

@@ -5,6 +5,8 @@ Ros2TraceAnalyzer is a fast command-line tool to extract useful data from LTTng 
 ## Supported ROS versions
 
 - Jazzy
+- Kilted (traces of `rclcpp_lifecycle` nodes are supported: their services are linked to the
+  `rclcpp_service_callback_added` events by position, see `process_rcl_lifecycle_state_machine_init`)
 
 ## Installation
 

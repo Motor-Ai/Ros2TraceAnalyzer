@@ -18,6 +18,12 @@ pub struct Analyses {
     message_take_to_callback_analysis: Option<analysis::MessageTakeToCallbackLatency>,
     dependency_graph: Option<analysis::DependencyGraph>,
     spin_duration_analysis: Option<analysis::SpinDuration>,
+    /// The processor owns every object (nodes → timers, subscribers, ...) while
+    /// callbacks and the analyses only keep weak references to them. It is
+    /// dropped at the end of `analyze_trace`, but the outputs (utilization,
+    /// take-to-callback latency, ...) are written afterwards and need those
+    /// objects, so they are kept alive here until the analyses are dropped.
+    nodes: Vec<std::sync::Arc<std::sync::Mutex<crate::model::Node>>>,
 }
 
 impl Analyses {
@@ -89,6 +95,9 @@ impl Analyses {
         }
 
         iter.log_counters();
+        let nodes = iter.processor.get_all_nodes();
+        drop(iter);
+        self.nodes = nodes;
 
         Ok(())
     }
